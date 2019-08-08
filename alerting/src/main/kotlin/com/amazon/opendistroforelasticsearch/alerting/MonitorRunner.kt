@@ -76,6 +76,10 @@ import org.elasticsearch.common.bytes.BytesReference
 import org.elasticsearch.common.component.AbstractLifecycleComponent
 import org.elasticsearch.common.settings.Settings
 import org.elasticsearch.common.xcontent.LoggingDeprecationHandler
+import org.elasticsearch.common.transport.TransportAddress
+import org.elasticsearch.common.unit.TimeValue
+import org.elasticsearch.common.util.concurrent.EsExecutors
+import org.elasticsearch.common.util.concurrent.EsRejectedExecutionException
 import org.elasticsearch.common.xcontent.NamedXContentRegistry
 import org.elasticsearch.common.xcontent.ToXContent
 import org.elasticsearch.common.xcontent.XContentFactory
@@ -101,7 +105,7 @@ class MonitorRunner(
     private val scriptService: ScriptService,
     private val xContentRegistry: NamedXContentRegistry,
     private val alertIndices: AlertIndices,
-    clusterService: ClusterService
+    private val clusterService: ClusterService
 ) : JobRunner, CoroutineScope, AbstractLifecycleComponent() {
 
     private val logger = LogManager.getLogger(MonitorRunner::class.java)
@@ -289,8 +293,26 @@ class MonitorRunner(
                         XContentType.JSON.xContent().createParser(xContentRegistry, LoggingDeprecationHandler.INSTANCE, searchSource).use {
                             searchRequest.source(SearchSourceBuilder.fromXContent(it))
                         }
-                        val searchResponse: SearchResponse = client.suspendUntil { client.search(searchRequest, it) }
-                        results += searchResponse.convertToMap()
+                        val roles: MutableCollection<String> = mutableListOf()
+                        monitor.roles.toCollection(roles)
+                        client.threadPool().threadContext.putTransient("assume_role", roles)
+                        logger.info("MonitoringPlugin: roles in threadpool are: ${client.threadPool().threadContext.getTransient<Collection<String>>("assume_role")}")
+                        if (client.threadPool().threadContext.getTransient<TransportAddress>("_opendistro_security_remote_address") == null) {
+                            client.threadPool().threadContext.putTransient("_opendistro_security_remote_address", clusterService.localNode().address)
+                        }
+                        try {
+                            logger.info("\\/\\/\\/\\/\\/\\/\\/")
+                            logger.info("About to run search...")
+                            val searchResponse: SearchResponse = client.suspendUntil { client.search(searchRequest, it) }
+                            results += searchResponse.convertToMap()
+                            logger.info("Done running search...")
+                            logger.info("\\/\\/\\/\\/\\/\\/\\/")
+                        } catch (e: org.elasticsearch.ElasticsearchSecurityException) {
+                            logger.info("Error collecting search results due to no permissions...")
+                            logger.info("Done running search...")
+                            logger.info("\\/\\/\\/\\/\\/\\/\\/")
+                            throw e
+                        }
                     }
                     else -> {
                         throw IllegalArgumentException("Unsupported input type: ${input.name()}.")

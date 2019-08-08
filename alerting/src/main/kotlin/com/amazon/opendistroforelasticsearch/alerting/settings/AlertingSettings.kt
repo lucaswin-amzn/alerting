@@ -18,6 +18,7 @@ package com.amazon.opendistroforelasticsearch.alerting.settings
 import com.amazon.opendistroforelasticsearch.alerting.AlertingPlugin
 import org.elasticsearch.common.settings.Setting
 import org.elasticsearch.common.unit.TimeValue
+import java.util.concurrent.TimeUnit
 
 /**
  * settings specific to [AlertingPlugin]. These settings include things like history index max age, request timeout, etc...

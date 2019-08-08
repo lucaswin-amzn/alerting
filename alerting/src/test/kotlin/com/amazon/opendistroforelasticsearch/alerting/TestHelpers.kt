@@ -63,7 +63,7 @@ fun randomMonitor(
 ): Monitor {
     return Monitor(name = name, enabled = enabled, inputs = inputs, schedule = schedule, triggers = triggers,
             enabledTime = enabledTime, lastUpdateTime = lastUpdateTime,
-            uiMetadata = if (withMetadata) mapOf("foo" to "bar") else mapOf())
+            uiMetadata = if (withMetadata) mapOf("foo" to "bar") else mapOf(), roles = listOf())
 }
 
 fun randomTrigger(

@@ -35,6 +35,7 @@ import org.elasticsearch.common.xcontent.XContentParser.Token
 import org.elasticsearch.common.xcontent.XContentParserUtils.ensureExpectedToken
 import java.io.IOException
 import java.time.Instant
+import java.util.logging.LogManager
 
 /**
  * A value object that represents a Monitor. Monitors are used to periodically execute a source query and check the
@@ -51,7 +52,8 @@ data class Monitor(
     val schemaVersion: Int = NO_SCHEMA_VERSION,
     val inputs: List<Input>,
     val triggers: List<Trigger>,
-    val uiMetadata: Map<String, Any>
+    val uiMetadata: Map<String, Any>,
+    val roles: List<String>
 ) : ScheduledJob {
 
     override val type = MONITOR_TYPE
@@ -91,6 +93,7 @@ data class Monitor(
                 .field(SCHEDULE_FIELD, schedule)
                 .field(INPUTS_FIELD, inputs.toTypedArray())
                 .field(TRIGGERS_FIELD, triggers.toTypedArray())
+                .field(ROLES_FIELD, roles.toTypedArray())
                 .optionalTimeField(LAST_UPDATE_TIME_FIELD, lastUpdateTime)
         if (uiMetadata.isNotEmpty()) builder.field(UI_METADATA_FIELD, uiMetadata)
         if (params.paramAsBoolean("with_type", false)) builder.endObject()
@@ -113,6 +116,7 @@ data class Monitor(
         const val LAST_UPDATE_TIME_FIELD = "last_update_time"
         const val UI_METADATA_FIELD = "ui_metadata"
         const val ENABLED_TIME_FIELD = "enabled_time"
+        const val ROLES_FIELD = "roles"
 
         // This is defined here instead of in ScheduledJob to avoid having the ScheduledJob class know about all
         // the different subclasses and creating circular dependencies
@@ -133,6 +137,7 @@ data class Monitor(
             var schemaVersion = NO_SCHEMA_VERSION
             val triggers: MutableList<Trigger> = mutableListOf()
             val inputs: MutableList<Input> = mutableListOf()
+            val roles: MutableList<String> = mutableListOf()
 
             ensureExpectedToken(Token.START_OBJECT, xcp.currentToken(), xcp::getTokenLocation)
             while (xcp.nextToken() != Token.END_OBJECT) {
@@ -159,6 +164,7 @@ data class Monitor(
                     ENABLED_TIME_FIELD -> enabledTime = xcp.instant()
                     LAST_UPDATE_TIME_FIELD -> lastUpdateTime = xcp.instant()
                     UI_METADATA_FIELD -> uiMetadata = xcp.map()
+                    ROLES_FIELD -> xcp.list().forEach { roles.add(it.toString()) }
                     else -> {
                         xcp.skipChildren()
                     }
@@ -170,6 +176,8 @@ data class Monitor(
             } else if (!enabled) {
                 enabledTime = null
             }
+
+
             return Monitor(id,
                     version,
                     requireNotNull(name) { "Monitor name is null" },
@@ -180,7 +188,8 @@ data class Monitor(
                     schemaVersion,
                     inputs.toList(),
                     triggers.toList(),
-                    uiMetadata)
+                    uiMetadata,
+                    roles.toList())
         }
     }
 }

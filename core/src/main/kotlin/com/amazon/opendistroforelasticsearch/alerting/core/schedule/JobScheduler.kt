@@ -71,7 +71,7 @@ class JobScheduler(private val threadPool: ThreadPool, private val jobRunner: Jo
      *         <code>false</code> otherwise.
      */
     fun schedule(scheduledJob: ScheduledJob): Boolean {
-        logger.info("Scheduling jobId : ${scheduledJob.id}, name: ${scheduledJob.name}")
+        logger.info("Scheduling jobId: ${scheduledJob.id}, name: ${scheduledJob.name}")
 
         if (!scheduledJob.enabled) {
             // ensure that the ScheduledJob is not enabled. The caller should be also checking this before calling this function.
