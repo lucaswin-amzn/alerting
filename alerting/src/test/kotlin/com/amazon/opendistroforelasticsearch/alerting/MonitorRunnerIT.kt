@@ -439,11 +439,12 @@ class MonitorRunnerIT : AlertingRestTestCase() {
     }
 
     fun `test execute monitor non-dryrun`() {
+        logger.info("About to call createMonitor")
         val monitor = createMonitor(
                 randomMonitor(triggers = listOf(randomTrigger(
                         condition = ALWAYS_RUN,
                         actions = listOf(randomAction(destinationId = createDestination().id))))))
-
+        logger.info("Created monitor")
         val response = executeMonitor(monitor.id, mapOf("dryrun" to "false"))
 
         assertEquals("failed dryrun", RestStatus.OK, response.restStatus())

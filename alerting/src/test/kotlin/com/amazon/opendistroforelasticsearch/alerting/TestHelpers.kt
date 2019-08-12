@@ -59,11 +59,12 @@ fun randomMonitor(
     triggers: List<Trigger> = (1..randomInt(10)).map { randomTrigger() },
     enabledTime: Instant? = if (enabled) Instant.now().truncatedTo(ChronoUnit.MILLIS) else null,
     lastUpdateTime: Instant = Instant.now().truncatedTo(ChronoUnit.MILLIS),
-    withMetadata: Boolean = false
+    withMetadata: Boolean = false,
+    roles: List<String> = listOf()
 ): Monitor {
     return Monitor(name = name, enabled = enabled, inputs = inputs, schedule = schedule, triggers = triggers,
             enabledTime = enabledTime, lastUpdateTime = lastUpdateTime,
-            uiMetadata = if (withMetadata) mapOf("foo" to "bar") else mapOf(), roles = listOf())
+            uiMetadata = if (withMetadata) mapOf("foo" to "bar") else mapOf(), roles = roles)
 }
 
 fun randomTrigger(

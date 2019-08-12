@@ -79,11 +79,15 @@ abstract class AlertingRestTestCase : ESRestTestCase() {
     }
 
     protected fun createDestination(destination: Destination = getTestDestination(), refresh: Boolean = true): Destination {
+        logger.info("About to create destination.")
+        logger.info("Destination is: $destination")
+        logger.info("Destination with to XContent is : ${destination.toJsonString()}")
         val response = client().makeRequest(
                 "POST",
                 "$DESTINATION_BASE_URI?refresh=$refresh",
                 emptyMap(),
                 destination.toHttpEntity())
+        logger.info("Created destination")
         assertEquals("Unable to create a new destination", RestStatus.CREATED, response.restStatus())
         val destinationJson = jsonXContent.createParser(NamedXContentRegistry.EMPTY, LoggingDeprecationHandler.INSTANCE,
                 response.entity.content).map()

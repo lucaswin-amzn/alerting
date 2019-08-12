@@ -25,18 +25,18 @@ import com.amazon.opendistroforelasticsearch.alerting.util.REFRESH
 import com.amazon.opendistroforelasticsearch.alerting.util._ID
 import com.amazon.opendistroforelasticsearch.alerting.util._VERSION
 import com.amazon.opendistroforelasticsearch.alerting.AlertingPlugin
+import com.amazon.opendistroforelasticsearch.alerting.elasticapi.convertToMap
 import com.amazon.opendistroforelasticsearch.alerting.settings.AlertingSettings.Companion.MAX_ACTION_THROTTLE_VALUE
 import com.amazon.opendistroforelasticsearch.alerting.util.IF_PRIMARY_TERM
 import com.amazon.opendistroforelasticsearch.alerting.util.IF_SEQ_NO
 import com.amazon.opendistroforelasticsearch.alerting.util.IndexUtils
 import com.amazon.opendistroforelasticsearch.alerting.util._PRIMARY_TERM
 import com.amazon.opendistroforelasticsearch.alerting.util._SEQ_NO
+import com.amazon.opendistroforelasticsearch.alerting.util.getTrustStore
 import org.apache.logging.log4j.LogManager
 import org.apache.http.HttpHost
-import org.apache.http.auth.AuthScope
-import org.apache.http.auth.UsernamePasswordCredentials
-import org.apache.http.impl.client.BasicCredentialsProvider
 import org.apache.http.message.BasicHeader
+import org.apache.http.ssl.SSLContexts
 import org.elasticsearch.action.ActionListener
 import org.elasticsearch.action.admin.indices.create.CreateIndexResponse
 import org.elasticsearch.action.get.GetRequest
@@ -77,9 +77,10 @@ import org.elasticsearch.rest.RestStatus
 import org.elasticsearch.rest.action.RestResponseListener
 import org.elasticsearch.search.builder.SearchSourceBuilder
 import java.io.IOException
-import java.time.Duration
 import java.security.SecureRandom
+import java.security.cert.CertificateException
 import java.security.cert.X509Certificate
+import java.time.Duration
 import java.time.Instant
 import javax.net.ssl.SSLContext
 import javax.net.ssl.X509TrustManager
@@ -90,7 +91,7 @@ private val log = LogManager.getLogger(RestIndexMonitorAction::class.java)
  * Rest handlers to create and update monitors.
  */
 class RestIndexMonitorAction(
-    settings: Settings,
+    private val settings: Settings,
     controller: RestController,
     jobIndices: ScheduledJobIndices,
     clusterService: ClusterService,
@@ -129,16 +130,6 @@ class RestIndexMonitorAction(
             throw IllegalArgumentException("Missing monitor ID")
         }
 
-//        client.threadPool().threadContext.putHeader("Authorization", )
-//        val user: User by lazy {
-//            val loader = ServiceLoader.load(User::class.java, User::class.java.classLoader)
-//        }
-
-//        var user: com.amazon.opendistroforelasticsearch.security.user.User
-//        user = threadContext.getTransient(ConfigConstants.OPENDISTRO_SECURITY_USER)
-//        logger.error("Thread Context user is: $user")
-//        logger.error("Thread Context user roles are: ${user.roles}")
-
         // Validate request by parsing JSON to Monitor
         val xcp = request.contentParser()
         ensureExpectedToken(Token.START_OBJECT, xcp.nextToken(), xcp::getTokenLocation)
@@ -167,41 +158,39 @@ class RestIndexMonitorAction(
         private var newMonitor: Monitor
     ) : AsyncActionHandler(client, channel) {
 
-        // TODO currently only works with basic auth.
         private fun getUserRoles(): List<String> {
             try {
+                val sc: SSLContext
+                if (!settings.get("opendistro_security.ssl.http.pemcert_filepath").isNullOrEmpty()){
+                    sc = SSLContexts.custom().loadTrustMaterial(getTrustStore("${settings.get("path.home")}/config/${settings.get("opendistro_security.ssl.http.pemcert_filepath")}"), null).build()
+                } else {
+                    sc = SSLContext.getInstance("SSL")
+                    sc.init(null, arrayOf(AllowAllTrustManager()), SecureRandom())
+                }
                 val request = Request("POST", "_opendistro/_security/authinfo")
-                val credentialsProvider = BasicCredentialsProvider()
-                credentialsProvider.setCredentials(AuthScope.ANY, UsernamePasswordCredentials("username","passk"))
-
-                val sc = SSLContext.getInstance("SSL")
-                sc.init(null, arrayOf(allowAll()), SecureRandom())
-                val client = RestClient.builder(HttpHost("localhost", 9200, "https")).setHttpClientConfigCallback { httpClientBuilder ->
-                        httpClientBuilder.setDefaultCredentialsProvider(credentialsProvider).setSSLContext(sc).setDefaultHeaders(mutableListOf(BasicHeader("Authorization", channel.request().header("Authorization")))) }.build()
-
-
+                val client = RestClient.builder(HttpHost("localhost", settings.getAsInt("http.port", 9200), "https")).setHttpClientConfigCallback { httpClientBuilder ->
+                        httpClientBuilder.setSSLContext(sc).setDefaultHeaders(mutableListOf(BasicHeader("Authorization", channel.request().header("Authorization")))) }.build()
                 val response = client.performRequest(request)
                 val parser = XContentType.JSON.xContent()
                         .createParser(NamedXContentRegistry.EMPTY, LoggingDeprecationHandler.INSTANCE, response.entity.content)
                 val map = parser.map()
-                logger.error("Auth info response is: $map")
-                val roles = map["roles"] as List<String>
-                logger.error("User roles are: $roles")
-                return roles
+                return map["roles"] as List<String>
             } catch (responseException: ResponseException) {
-                logger.info("Elasticsearch Response Exception: $responseException")
+                log.info("Elasticsearch Response Exception: $responseException")
                 throw responseException
             } catch (exception: Exception) {
-                logger.error("Exception", exception)
+                log.error("Exception", exception)
                 throw exception
             }
         }
 
-        inner class allowAll: X509TrustManager {
-            override fun checkClientTrusted(p0: Array<out X509Certificate>?, p1: String?) {
+        inner class AllowAllTrustManager : X509TrustManager {
+            @Throws(CertificateException::class)
+            override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {
             }
 
-            override fun checkServerTrusted(p0: Array<out X509Certificate>?, p1: String?) {
+            @Throws(CertificateException::class)
+            override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {
             }
 
             override fun getAcceptedIssuers(): Array<X509Certificate> {
@@ -210,9 +199,8 @@ class RestIndexMonitorAction(
         }
 
         fun start() {
-            val userRoles = getUserRoles()
-            logger.info("User roles are: $userRoles")
-            newMonitor.roles.forEach { if (!userRoles.contains(it)) throw IllegalArgumentException("You do not have access to role $it and cannot create a monitor with it.") }
+//            val userRoles = getUserRoles()
+//            newMonitor.roles.forEach { if (!userRoles.contains(it)) throw IllegalArgumentException("You do not have access to role $it and cannot create a monitor with it.") }
             if (!scheduledJobIndices.scheduledJobIndexExists()) {
                 scheduledJobIndices.initScheduledJobIndex(ActionListener.wrap(::onCreateMappingsResponse, ::onFailure))
             } else {
