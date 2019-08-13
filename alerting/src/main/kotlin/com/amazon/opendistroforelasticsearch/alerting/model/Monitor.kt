@@ -35,7 +35,6 @@ import org.elasticsearch.common.xcontent.XContentParser.Token
 import org.elasticsearch.common.xcontent.XContentParserUtils.ensureExpectedToken
 import java.io.IOException
 import java.time.Instant
-import java.util.logging.LogManager
 
 /**
  * A value object that represents a Monitor. Monitors are used to periodically execute a source query and check the
@@ -176,7 +175,6 @@ data class Monitor(
             } else if (!enabled) {
                 enabledTime = null
             }
-
 
             return Monitor(id,
                     version,

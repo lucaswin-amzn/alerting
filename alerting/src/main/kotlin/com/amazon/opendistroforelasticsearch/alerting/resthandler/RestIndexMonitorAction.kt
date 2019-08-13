@@ -25,7 +25,6 @@ import com.amazon.opendistroforelasticsearch.alerting.util.REFRESH
 import com.amazon.opendistroforelasticsearch.alerting.util._ID
 import com.amazon.opendistroforelasticsearch.alerting.util._VERSION
 import com.amazon.opendistroforelasticsearch.alerting.AlertingPlugin
-import com.amazon.opendistroforelasticsearch.alerting.elasticapi.convertToMap
 import com.amazon.opendistroforelasticsearch.alerting.settings.AlertingSettings.Companion.MAX_ACTION_THROTTLE_VALUE
 import com.amazon.opendistroforelasticsearch.alerting.util.IF_PRIMARY_TERM
 import com.amazon.opendistroforelasticsearch.alerting.util.IF_SEQ_NO
@@ -33,11 +32,20 @@ import com.amazon.opendistroforelasticsearch.alerting.util.IndexUtils
 import com.amazon.opendistroforelasticsearch.alerting.util._PRIMARY_TERM
 import com.amazon.opendistroforelasticsearch.alerting.util._SEQ_NO
 import com.amazon.opendistroforelasticsearch.alerting.util.getTrustStore
+import com.amazon.opendistroforelasticsearch.alerting.util.loadCertificatesFromFile
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.apache.logging.log4j.LogManager
 import org.apache.http.HttpHost
 import org.apache.http.message.BasicHeader
 import org.apache.http.ssl.SSLContexts
 import org.elasticsearch.action.ActionListener
+import org.elasticsearch.action.admin.cluster.node.info.NodesInfoRequest
+import org.elasticsearch.action.admin.cluster.node.info.TransportNodesInfoAction
+import org.elasticsearch.action.admin.cluster.state.ClusterStateRequest
+import org.elasticsearch.action.admin.cluster.state.ClusterStateResponse
 import org.elasticsearch.action.admin.indices.create.CreateIndexResponse
 import org.elasticsearch.action.get.GetRequest
 import org.elasticsearch.action.get.GetResponse
@@ -77,13 +85,10 @@ import org.elasticsearch.rest.RestStatus
 import org.elasticsearch.rest.action.RestResponseListener
 import org.elasticsearch.search.builder.SearchSourceBuilder
 import java.io.IOException
-import java.security.SecureRandom
-import java.security.cert.CertificateException
+import java.nio.file.Path
 import java.security.cert.X509Certificate
 import java.time.Duration
 import java.time.Instant
-import javax.net.ssl.SSLContext
-import javax.net.ssl.X509TrustManager
 
 private val log = LogManager.getLogger(RestIndexMonitorAction::class.java)
 
@@ -95,12 +100,14 @@ class RestIndexMonitorAction(
     controller: RestController,
     jobIndices: ScheduledJobIndices,
     clusterService: ClusterService,
-    threadContext: ThreadContext
+    threadContext: ThreadContext,
+    private val configPath: Path
 ) : BaseRestHandler(settings) {
 
     private var scheduledJobIndices: ScheduledJobIndices
     private val clusterService: ClusterService
     private var threadContext: ThreadContext
+    private var securityPluginInstalled: Boolean? = null
     @Volatile private var maxMonitors = ALERTING_MAX_MONITORS.get(settings)
     @Volatile private var requestTimeout = REQUEST_TIMEOUT.get(settings)
     @Volatile private var indexTimeout = INDEX_TIMEOUT.get(settings)
@@ -142,11 +149,11 @@ class RestIndexMonitorAction(
             WriteRequest.RefreshPolicy.IMMEDIATE
         }
         return RestChannelConsumer { channel ->
-            IndexMonitorHandler(client, channel, id, seqNo, primaryTerm, refreshPolicy, monitor).start()
+            GlobalScope.launch {
+                IndexMonitorHandler(client, channel, id, seqNo, primaryTerm, refreshPolicy, monitor).start()
+            }
         }
     }
-
-
 
     inner class IndexMonitorHandler(
         client: NodeClient,
@@ -158,49 +165,17 @@ class RestIndexMonitorAction(
         private var newMonitor: Monitor
     ) : AsyncActionHandler(client, channel) {
 
-        private fun getUserRoles(): List<String> {
-            try {
-                val sc: SSLContext
-                if (!settings.get("opendistro_security.ssl.http.pemcert_filepath").isNullOrEmpty()){
-                    sc = SSLContexts.custom().loadTrustMaterial(getTrustStore("${settings.get("path.home")}/config/${settings.get("opendistro_security.ssl.http.pemcert_filepath")}"), null).build()
-                } else {
-                    sc = SSLContext.getInstance("SSL")
-                    sc.init(null, arrayOf(AllowAllTrustManager()), SecureRandom())
-                }
-                val request = Request("POST", "_opendistro/_security/authinfo")
-                val client = RestClient.builder(HttpHost("localhost", settings.getAsInt("http.port", 9200), "https")).setHttpClientConfigCallback { httpClientBuilder ->
-                        httpClientBuilder.setSSLContext(sc).setDefaultHeaders(mutableListOf(BasicHeader("Authorization", channel.request().header("Authorization")))) }.build()
-                val response = client.performRequest(request)
-                val parser = XContentType.JSON.xContent()
-                        .createParser(NamedXContentRegistry.EMPTY, LoggingDeprecationHandler.INSTANCE, response.entity.content)
-                val map = parser.map()
-                return map["roles"] as List<String>
-            } catch (responseException: ResponseException) {
-                log.info("Elasticsearch Response Exception: $responseException")
-                throw responseException
-            } catch (exception: Exception) {
-                log.error("Exception", exception)
-                throw exception
+        suspend fun start() {
+            if (securityPluginInstalled == null) {
+                withContext(Dispatchers.IO) { checkForSecurityPlugin() }
             }
-        }
-
-        inner class AllowAllTrustManager : X509TrustManager {
-            @Throws(CertificateException::class)
-            override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {
+            if (securityPluginInstalled == true) {
+                withContext(Dispatchers.IO) { validateRoles() }
             }
-
-            @Throws(CertificateException::class)
-            override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {
-            }
-
-            override fun getAcceptedIssuers(): Array<X509Certificate> {
-                return arrayOf()
-            }
-        }
-
-        fun start() {
-//            val userRoles = getUserRoles()
-//            newMonitor.roles.forEach { if (!userRoles.contains(it)) throw IllegalArgumentException("You do not have access to role $it and cannot create a monitor with it.") }
+//            else if (securityPluginInstalled) {
+//                getUserRoles(settings, channel.request().header("Authorization"), newMonitor)
+////                newMonitor.roles.forEach { if (!userRoles.contains(it)) throw IllegalArgumentException("You do not have access to role $it and cannot create a monitor with it.") }
+//            }
             if (!scheduledJobIndices.scheduledJobIndexExists()) {
                 scheduledJobIndices.initScheduledJobIndex(ActionListener.wrap(::onCreateMappingsResponse, ::onFailure))
             } else {
@@ -211,6 +186,27 @@ class RestIndexMonitorAction(
                 } else {
                     prepareMonitorIndexing()
                 }
+            }
+        }
+
+        fun validateRoles() {
+            val certificates = loadCertificatesFromFile("$configPath/${settings.get("opendistro_security.ssl.http.pemcert_filepath"}))
+            log.info("Loaded certificates: $certificates")
+        }
+
+        fun checkForSecurityPlugin() {
+            val nodesInfoRequest = NodesInfoRequest().clear().plugins(true)
+            val nodesInforesponse = client.admin().cluster().nodesInfo(nodesInfoRequest).get()
+            for (nodeInfo in nodesInforesponse.nodes) {
+                for (pluginInfo in nodeInfo.plugins.pluginInfos) {
+                    if (pluginInfo.name == "opendistro_security") {
+                        securityPluginInstalled = true
+                        break
+                    }
+                }
+            }
+            if (securityPluginInstalled == null) {
+                securityPluginInstalled = false
             }
         }
 

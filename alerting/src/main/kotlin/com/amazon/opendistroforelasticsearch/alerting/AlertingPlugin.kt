@@ -35,6 +35,7 @@ import com.amazon.opendistroforelasticsearch.alerting.resthandler.RestIndexMonit
 import com.amazon.opendistroforelasticsearch.alerting.resthandler.RestSearchMonitorAction
 import com.amazon.opendistroforelasticsearch.alerting.script.TriggerScript
 import com.amazon.opendistroforelasticsearch.alerting.settings.AlertingSettings
+//import com.amazon.opendistroforelasticsearch.alerting.util.PluginIntegrationUtils
 import org.elasticsearch.action.ActionRequest
 import org.elasticsearch.action.ActionResponse
 import org.elasticsearch.client.Client
@@ -63,6 +64,7 @@ import org.elasticsearch.script.ScriptContext
 import org.elasticsearch.script.ScriptService
 import org.elasticsearch.threadpool.ThreadPool
 import org.elasticsearch.watcher.ResourceWatcherService
+import java.nio.file.Path
 import java.util.function.Supplier
 
 /**
@@ -92,6 +94,7 @@ internal class AlertingPlugin : PainlessExtension, ActionPlugin, ScriptPlugin, P
     lateinit var threadPool: ThreadPool
     lateinit var alertIndices: AlertIndices
     lateinit var clusterService: ClusterService
+    lateinit var configPath: Path
 
     override fun getRestHandlers(
         settings: Settings,
@@ -104,7 +107,7 @@ internal class AlertingPlugin : PainlessExtension, ActionPlugin, ScriptPlugin, P
     ): List<RestHandler> {
         return listOf(RestGetMonitorAction(settings, restController),
                 RestDeleteMonitorAction(settings, restController),
-                RestIndexMonitorAction(settings, restController, scheduledJobIndices, clusterService, threadPool.threadContext),
+                RestIndexMonitorAction(settings, restController, scheduledJobIndices, clusterService, threadPool.threadContext, configPath),
                 RestSearchMonitorAction(settings, restController),
                 RestExecuteMonitorAction(settings, restController, runner),
                 RestAcknowledgeAlertAction(settings, restController),
@@ -141,6 +144,8 @@ internal class AlertingPlugin : PainlessExtension, ActionPlugin, ScriptPlugin, P
         sweeper = JobSweeper(environment.settings(), client, clusterService, threadPool, xContentRegistry, scheduler, ALERTING_JOB_TYPES)
         this.threadPool = threadPool
         this.clusterService = clusterService
+        this.configPath = environment.configFile()
+//        val pluginIntegration = PluginIntegrationUtils.loadCertificatesFromFile(configPath)
         return listOf(sweeper, scheduler, runner, scheduledJobIndices)
     }
 

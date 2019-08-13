@@ -92,12 +92,9 @@ class RestIndexDestinationAction(
         }
 
         // Validate request by parsing JSON to Destination
-        log.info("In prepare request for destination...")
         val xcp = request.contentParser()
         XContentParserUtils.ensureExpectedToken(XContentParser.Token.START_OBJECT, xcp.nextToken(), xcp::getTokenLocation)
-        log.info("About parse destination in handler...")
         val destination = Destination.parse(xcp, id)
-        log.info("Parsed destination in handler... $destination")
         val seqNo = request.paramAsLong(IF_SEQ_NO, SequenceNumbers.UNASSIGNED_SEQ_NO)
         val primaryTerm = request.paramAsLong(IF_PRIMARY_TERM, SequenceNumbers.UNASSIGNED_PRIMARY_TERM)
         val refreshPolicy = if (request.hasParam(REFRESH)) {
@@ -122,6 +119,7 @@ class RestIndexDestinationAction(
 
         fun start() {
             if (!scheduledJobIndices.scheduledJobIndexExists()) {
+                log.error("In not scheduledJobIndicies existing")
                 scheduledJobIndices.initScheduledJobIndex(ActionListener.wrap(::onCreateMappingsResponse, ::onFailure))
             } else {
                 if (!IndexUtils.scheduledJobIndexUpdated) {
