@@ -46,6 +46,7 @@ import org.apache.http.message.BasicHeader
 import org.apache.http.ssl.SSLContexts
 import org.elasticsearch.action.ActionListener
 import org.elasticsearch.action.admin.cluster.node.info.NodesInfoRequest
+import org.elasticsearch.action.admin.cluster.node.info.NodesInfoResponse
 import org.elasticsearch.action.admin.cluster.node.info.TransportNodesInfoAction
 import org.elasticsearch.action.admin.cluster.state.ClusterStateRequest
 import org.elasticsearch.action.admin.cluster.state.ClusterStateResponse
@@ -90,7 +91,7 @@ import org.elasticsearch.rest.action.RestResponseListener
 import org.elasticsearch.search.builder.SearchSourceBuilder
 import java.io.IOException
 import java.nio.file.Path
-import java.security.cert.X509Certificate
+import java.security.KeyStore
 import java.time.Duration
 import java.time.Instant
 
@@ -171,11 +172,13 @@ class RestIndexMonitorAction(
         private var newMonitor: Monitor
     ) : AsyncActionHandler(client, channel) {
 
+        var securityKeyStore: KeyStore? = null
+        var keyStoreExists: Boolean? = null
+
         suspend fun start() {
             if (securityPluginInstalled == null) {
-                withContext(Dispatchers.IO) { checkForSecurityPlugin() }
-            }
-            if (securityPluginInstalled == true) {
+                return checkForSecurityPlugin()
+            } else if (securityPluginInstalled == true) {
                 withContext(Dispatchers.IO) { validateRoles() }
             }
 //            else if (securityPluginInstalled) {
@@ -214,24 +217,31 @@ class RestIndexMonitorAction(
         }
 
         fun validateRoles() {
-            val certificates = loadCertificatesFromFile("$configPath/${settings.get("opendistro_security.ssl.http.pemcert_filepath"}))
-            log.info("Loaded certificates: $certificates")
-        }
-
-        fun checkForSecurityPlugin() {
-            val nodesInfoRequest = NodesInfoRequest().clear().plugins(true)
-            val nodesInforesponse = client.admin().cluster().nodesInfo(nodesInfoRequest).get()
-            for (nodeInfo in nodesInforesponse.nodes) {
-                for (pluginInfo in nodeInfo.plugins.pluginInfos) {
-                    if (pluginInfo.name == "opendistro_security") {
-                        securityPluginInstalled = true
-                        break
+            if (keyStoreExists == null) {
+                val pemFilePath = settings.get("opendistro_security.ssl.http.pemcert_filepath")
+                if (pemFilePath.isNullOrEmpty()) {
+                    keyStoreExists = false
+                } else {
+                    try {
+                        securityKeyStore = getTrustStore("$configPath/${settings.get("opendistro_security.ssl.http.pemcert_filepath")}")
+                        log.info("Loaded keystore succesfully")
+                        keyStoreExists = true
+                    } catch (e: Exception) {
+                        keyStoreExists = false
+                        log.error("Failed to get keystore: ", e)
                     }
                 }
             }
-            if (securityPluginInstalled == null) {
-                securityPluginInstalled = false
+            if (keyStoreExists == true) {
+
+            } else {
+
             }
+        }
+
+        private fun checkForSecurityPlugin() {
+            val nodesInfoRequest = NodesInfoRequest().clear().plugins(true)
+            client.admin().cluster().nodesInfo(nodesInfoRequest, onNodeInfoResponse())
         }
 
         /**
@@ -312,11 +322,11 @@ class RestIndexMonitorAction(
         private fun indexMonitor() {
             newMonitor = newMonitor.copy(schemaVersion = IndexUtils.scheduledJobIndexSchemaVersion)
             val indexRequest = IndexRequest(SCHEDULED_JOBS_INDEX)
-                        .setRefreshPolicy(refreshPolicy)
-                        .source(newMonitor.toXContentWithType(channel.newBuilder()))
-                        .setIfSeqNo(seqNo)
-                        .setIfPrimaryTerm(primaryTerm)
-                        .timeout(indexTimeout)
+                    .setRefreshPolicy(refreshPolicy)
+                    .source(newMonitor.toXContentWithType(channel.newBuilder()))
+                    .setIfSeqNo(seqNo)
+                    .setIfPrimaryTerm(primaryTerm)
+                    .timeout(indexTimeout)
             client.index(indexRequest, indexMonitorResponse())
         }
 
@@ -373,6 +383,26 @@ class RestIndexMonitorAction(
                         restResponse.addHeader("Location", location)
                     }
                     return restResponse
+                }
+            }
+        }
+
+        private fun onNodeInfoResponse(): RestResponseListener<NodesInfoResponse> {
+            return object : RestResponseListener<NodesInfoResponse>(channel) {
+                @Throws(Exception::class)
+                override fun buildResponse(response: NodesInfoResponse): RestResponse {
+                    for (nodeInfo in response.nodes) {
+                        for (pluginInfo in nodeInfo.plugins.pluginInfos) {
+                            if (pluginInfo.name == "opendistro_security") {
+                                securityPluginInstalled = true
+                                break
+                            }
+                        }
+                    }
+                    if (securityPluginInstalled == null) {
+                        securityPluginInstalled = false
+                    }
+                    return BytesRestResponse(RestStatus.OK, "abc")
                 }
             }
         }

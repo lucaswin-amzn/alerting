@@ -35,7 +35,8 @@ import com.amazon.opendistroforelasticsearch.alerting.resthandler.RestIndexMonit
 import com.amazon.opendistroforelasticsearch.alerting.resthandler.RestSearchMonitorAction
 import com.amazon.opendistroforelasticsearch.alerting.script.TriggerScript
 import com.amazon.opendistroforelasticsearch.alerting.settings.AlertingSettings
-//import com.amazon.opendistroforelasticsearch.alerting.util.PluginIntegrationUtils
+import com.amazon.opendistroforelasticsearch.alerting.util.getTrustStore
+import com.amazon.opendistroforelasticsearch.alerting.util.loadCertificatesFromFile
 import org.elasticsearch.action.ActionRequest
 import org.elasticsearch.action.ActionResponse
 import org.elasticsearch.client.Client
@@ -65,6 +66,7 @@ import org.elasticsearch.script.ScriptService
 import org.elasticsearch.threadpool.ThreadPool
 import org.elasticsearch.watcher.ResourceWatcherService
 import java.nio.file.Path
+import java.security.KeyStore
 import java.util.function.Supplier
 
 /**
@@ -145,7 +147,6 @@ internal class AlertingPlugin : PainlessExtension, ActionPlugin, ScriptPlugin, P
         this.threadPool = threadPool
         this.clusterService = clusterService
         this.configPath = environment.configFile()
-//        val pluginIntegration = PluginIntegrationUtils.loadCertificatesFromFile(configPath)
         return listOf(sweeper, scheduler, runner, scheduledJobIndices)
     }
 
