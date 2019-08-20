@@ -26,6 +26,7 @@ import com.amazon.opendistroforelasticsearch.alerting.settings.AlertingSettings.
 import com.amazon.opendistroforelasticsearch.alerting.settings.AlertingSettings.Companion.INDEX_TIMEOUT
 import com.amazon.opendistroforelasticsearch.alerting.settings.AlertingSettings.Companion.MAX_ACTION_THROTTLE_VALUE
 import com.amazon.opendistroforelasticsearch.alerting.settings.AlertingSettings.Companion.REQUEST_TIMEOUT
+import com.amazon.opendistroforelasticsearch.alerting.util.AllowAllTrustManager
 import com.amazon.opendistroforelasticsearch.alerting.util.IF_PRIMARY_TERM
 import com.amazon.opendistroforelasticsearch.alerting.util.IF_SEQ_NO
 import com.amazon.opendistroforelasticsearch.alerting.util.IndexUtils
@@ -92,8 +93,10 @@ import org.elasticsearch.search.builder.SearchSourceBuilder
 import java.io.IOException
 import java.nio.file.Path
 import java.security.KeyStore
+import java.security.SecureRandom
 import java.time.Duration
 import java.time.Instant
+import javax.net.ssl.SSLContext
 
 private val log = LogManager.getLogger(RestIndexMonitorAction::class.java)
 
@@ -179,30 +182,9 @@ class RestIndexMonitorAction(
             if (securityPluginInstalled == null) {
                 return checkForSecurityPlugin()
             } else if (securityPluginInstalled == true) {
-                withContext(Dispatchers.IO) { validateRoles() }
+                validateRoles()
             }
-//            else if (securityPluginInstalled) {
-//                getUserRoles(settings, channel.request().header("Authorization"), newMonitor)
-////                newMonitor.roles.forEach { if (!userRoles.contains(it)) throw IllegalArgumentException("You do not have access to role $it and cannot create a monitor with it.") }
-//            }
-            val (periodStart, periodEnd) = newMonitor.schedule.getPeriodEndingAt(Instant.now())
-            val result = runner.runMonitor(newMonitor, periodStart, periodEnd, true)
-            if (result.inputResults.error != null) {
-                log.error("Failed to index monitor due to an error during input execution: ${result.inputResults.error}")
-                channel.sendResponse(BytesRestResponse(channel, result.inputResults.error))
-                return
-            } else if (result.error != null) {
-                log.error("Failed to index monitor due to an error during execution: ${result.error}")
-                channel.sendResponse(BytesRestResponse(channel, result.error))
-                return
-            }
-            for ((_, triggerResult) in result.triggerResults) {
-                if (triggerResult.error != null) {
-                    log.error("Failed to index monitor due to an error during trigger evaluation: ${triggerResult.error}")
-                    channel.sendResponse(BytesRestResponse(channel, triggerResult.error))
-                    return
-                }
-            }
+            if (!isValidMonitor()) return
             if (!scheduledJobIndices.scheduledJobIndexExists()) {
                 scheduledJobIndices.initScheduledJobIndex(onCreateMappingsResponse(channel))
             } else {
@@ -216,7 +198,31 @@ class RestIndexMonitorAction(
             }
         }
 
+        // Returns true if the monitor does not run into any errors while executing.
+        suspend fun isValidMonitor(): Boolean {
+            val (periodStart, periodEnd) = newMonitor.schedule.getPeriodEndingAt(Instant.now())
+            val result = runner.runMonitor(newMonitor, periodStart, periodEnd, true)
+            if (result.inputResults.error != null) {
+                log.error("Failed to index monitor due to an error during input execution: ${result.inputResults.error}")
+                channel.sendResponse(BytesRestResponse(channel, result.inputResults.error))
+                return false
+            } else if (result.error != null) {
+                log.error("Failed to index monitor due to an error during execution: ${result.error}")
+                channel.sendResponse(BytesRestResponse(channel, result.error))
+                return false
+            }
+            for ((_, triggerResult) in result.triggerResults) {
+                if (triggerResult.error != null) {
+                    log.error("Failed to index monitor due to an error during trigger evaluation: ${triggerResult.error}")
+                    channel.sendResponse(BytesRestResponse(channel, triggerResult.error))
+                    return false
+                }
+            }
+            return true
+        }
+
         fun validateRoles() {
+            val sc: SSLContext
             if (keyStoreExists == null) {
                 val pemFilePath = settings.get("opendistro_security.ssl.http.pemcert_filepath")
                 if (pemFilePath.isNullOrEmpty()) {
@@ -224,7 +230,6 @@ class RestIndexMonitorAction(
                 } else {
                     try {
                         securityKeyStore = getTrustStore("$configPath/${settings.get("opendistro_security.ssl.http.pemcert_filepath")}")
-                        log.info("Loaded keystore succesfully")
                         keyStoreExists = true
                     } catch (e: Exception) {
                         keyStoreExists = false
@@ -233,10 +238,20 @@ class RestIndexMonitorAction(
                 }
             }
             if (keyStoreExists == true) {
-
+                sc = SSLContexts.custom().loadTrustMaterial(securityKeyStore, null).build()
             } else {
-
+                sc = SSLContext.getInstance("SSL")
+                sc.init(null, arrayOf(AllowAllTrustManager()), SecureRandom())
             }
+            val request = Request("POST", "_opendistro/_security/authinfo")
+            val client = RestClient.builder(HttpHost("localhost", settings.getAsInt("http.port", 9200), "https")).setHttpClientConfigCallback { httpClientBuilder ->
+                httpClientBuilder.setSSLContext(sc).setDefaultHeaders(mutableListOf(BasicHeader("Authorization", channel.request().header("Authorization")))) }.build()
+            val response = client.performRequest(request)
+            val parser = XContentType.JSON.xContent()
+                    .createParser(NamedXContentRegistry.EMPTY, LoggingDeprecationHandler.INSTANCE, response.entity.content)
+            val userRoles = parser.map()["roles"] as List<String>
+            log.info("Roles from auth info request: $userRoles")
+            newMonitor.roles.forEach { role -> if (!userRoles.contains(role)) return channel.sendResponse(BytesRestResponse(RestStatus.FORBIDDEN, "Cannot create monitor with roles that you do not pertain to."))  }
         }
 
         private fun checkForSecurityPlugin() {
@@ -387,10 +402,10 @@ class RestIndexMonitorAction(
             }
         }
 
-        private fun onNodeInfoResponse(): RestResponseListener<NodesInfoResponse> {
-            return object : RestResponseListener<NodesInfoResponse>(channel) {
+        private fun onNodeInfoResponse(): RestActionListener<NodesInfoResponse> {
+            return object : RestActionListener<NodesInfoResponse>(channel) {
                 @Throws(Exception::class)
-                override fun buildResponse(response: NodesInfoResponse): RestResponse {
+                override fun processResponse(response: NodesInfoResponse) {
                     for (nodeInfo in response.nodes) {
                         for (pluginInfo in nodeInfo.plugins.pluginInfos) {
                             if (pluginInfo.name == "opendistro_security") {
@@ -402,7 +417,8 @@ class RestIndexMonitorAction(
                     if (securityPluginInstalled == null) {
                         securityPluginInstalled = false
                     }
-                    return BytesRestResponse(RestStatus.OK, "abc")
+                    validateRoles()
+                    prepareMonitorIndexing()
                 }
             }
         }

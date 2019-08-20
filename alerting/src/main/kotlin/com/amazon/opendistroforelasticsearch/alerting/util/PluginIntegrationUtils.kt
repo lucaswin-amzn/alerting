@@ -3,8 +3,10 @@ package com.amazon.opendistroforelasticsearch.alerting.util
 import java.nio.file.Files
 import java.nio.file.Path
 import java.security.KeyStore
+import java.security.cert.CertificateException
 import java.security.cert.CertificateFactory
 import java.security.cert.X509Certificate
+import javax.net.ssl.X509TrustManager
 
 
 fun getTrustStore(file: String): KeyStore? {
@@ -44,5 +46,19 @@ fun toTruststore(trustCertificatesAliasPrefix: String, trustCertificates: Array<
             }
         }
         return ks
+    }
+}
+
+class AllowAllTrustManager : X509TrustManager {
+    @Throws(CertificateException::class)
+    override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {
+    }
+
+    @Throws(CertificateException::class)
+    override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {
+    }
+
+    override fun getAcceptedIssuers(): Array<X509Certificate> {
+        return arrayOf()
     }
 }
