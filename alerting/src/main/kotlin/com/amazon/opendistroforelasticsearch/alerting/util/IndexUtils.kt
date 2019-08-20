@@ -17,7 +17,6 @@ package com.amazon.opendistroforelasticsearch.alerting.util
 
 import com.amazon.opendistroforelasticsearch.alerting.alerts.AlertIndices
 import com.amazon.opendistroforelasticsearch.alerting.core.ScheduledJobIndices
-import org.elasticsearch.action.ActionListener
 import org.elasticsearch.action.admin.indices.mapping.put.PutMappingRequest
 import org.elasticsearch.action.support.master.AcknowledgedResponse
 import org.elasticsearch.client.IndicesAdminClient
@@ -27,6 +26,7 @@ import org.elasticsearch.common.xcontent.LoggingDeprecationHandler
 import org.elasticsearch.common.xcontent.NamedXContentRegistry
 import org.elasticsearch.common.xcontent.XContentParser
 import org.elasticsearch.common.xcontent.XContentType
+import org.elasticsearch.rest.action.RestActionListener
 
 class IndexUtils {
 
@@ -117,7 +117,7 @@ class IndexUtils {
             mapping: String,
             clusterState: ClusterState,
             client: IndicesAdminClient,
-            actionListener: ActionListener<AcknowledgedResponse>
+            actionListener: RestActionListener<AcknowledgedResponse>
         ) {
             if (clusterState.metaData.indices.containsKey(index)) {
                 if (shouldUpdateIndex(clusterState.metaData.indices[index], mapping)) {
