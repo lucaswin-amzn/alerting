@@ -1,0 +1,16 @@
+name: Test Chime
+
+on:
+  pull_request:
+    branches: 
+      - "*"
+
+jobs:
+  send_message:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v1
+    - name: Send Message
+      run: curl -X POST $CHIME_WEBHOOK -H "Content-Type:application/json" --data '{"Content":"A new pull request has been made."}'
+      env: 
+        CHIME_WEBHOOK: ${{secrets.TEST_CHIME}}
