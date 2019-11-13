@@ -11,6 +11,9 @@ jobs:
     steps:
     - uses: actions/checkout@v1
     - name: Send Message
-      run: curl -X POST $CHIME_WEBHOOK -H "Content-Type:application/json" --data '{"Content":"A new pull request has been made."}'
+      run: 
+        export MESSAGE = "@Present Members \n A new PR has been for\: https\://github.com/opendistro-for-elasticsearch/${{github.repository}}"
+        export DATA = '{"Content":"$MESSAGE"}'
+        curl -X POST $CHIME_WEBHOOK -H "Content-Type:application/json" --data $DATA
       env: 
         CHIME_WEBHOOK: ${{secrets.TEST_CHIME}}
