@@ -1,4 +1,4 @@
 Hello World!
  foo
  bar
-baz
+ baz
