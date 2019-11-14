@@ -14,8 +14,8 @@ jobs:
       run: |
         export MESSAGE="@Present Members \n A new PR has been for: https://github.com/${{github.repository}}"
         export DATA="{\"Content\":\"$MESSAGE\"}"
-        curl -X POST $CHIME_WEBHOOK -H "Content-Type:application/json" --data $DATA
         echo $MESSAGE
         echo $DATA
+        curl -X POST $CHIME_WEBHOOK -H "Content-Type:application/json" --data $DATA
       env: 
         CHIME_WEBHOOK: ${{secrets.TEST_CHIME}}
